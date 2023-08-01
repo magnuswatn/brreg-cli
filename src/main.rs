@@ -39,6 +39,20 @@ struct SearchResponse {
     _embedded: Option<Underenheter>,
 }
 
+struct OrganizationWithRelatedOrgs {
+    org_type: &'static str,
+    org: Organization,
+    maybe_parent_org: Option<Organization>,
+    maybe_child_orgs: Option<Underenheter>,
+}
+
+enum BrregOrgNrSearchResult {
+    Found(OrganizationWithRelatedOrgs),
+    NotFound(),
+    // TODO: get deleted date from response
+    Removed(&'static str), // hovedenhet/underenhet
+}
+
 // https://data.brreg.no/enhetsregisteret/api/docs/index.html#_500_feil_p%C3%A5_server
 #[derive(Deserialize, Debug)]
 struct BrregInternalServerError {
@@ -231,13 +245,12 @@ fn get_norwegian_bool(input: bool) -> &'static str {
     return if input { "Ja" } else { "Nei" };
 }
 
-fn print_org_info(
-    org_type: &str,
-    org: Organization,
-    maybe_parent_org: Option<Organization>,
-    maybe_child_orgs: Option<Underenheter>,
-) {
-    println!("********************** {} **********************", org_type);
+fn print_org_info(org_with_related_orgs: OrganizationWithRelatedOrgs) {
+    let org = org_with_related_orgs.org;
+    println!(
+        "********************** {} **********************",
+        org_with_related_orgs.org_type
+    );
     println!("{}: {}", pad_title("Orgnummer"), org.organisasjonsnummer);
     println!("{}: {}", pad_title("Navn"), org.navn);
 
@@ -280,7 +293,7 @@ fn print_org_info(
         );
     }
 
-    if let Some(parent_org) = maybe_parent_org {
+    if let Some(parent_org) = org_with_related_orgs.maybe_parent_org {
         println!(
             "{}: {} - {}",
             pad_title("Overordnet enhet"),
@@ -289,7 +302,7 @@ fn print_org_info(
         )
     }
 
-    if let Some(child_orgs) = maybe_child_orgs {
+    if let Some(child_orgs) = org_with_related_orgs.maybe_child_orgs {
         let underenheter = child_orgs.underenheter;
         if underenheter.len() > 0 {
             print!("{}:", pad_title("Underenheter (20 første)"));
@@ -309,68 +322,52 @@ fn print_org_info(
     }
 }
 
-fn handle_main_error(error: BrregError) {
-    // Handles error for the "main" queries, where
-    // a 404 or 410 is to be expected, and should
-    // be communicated to the user.
-    match error.typ {
-        BrregErrorType::Gone => {
-            eprintln!("Denne enheten er fjernet fra brreg");
+fn search_org_by_orgnr(client: &Client, orgnr: &str) -> Result<BrregOrgNrSearchResult, BrregError> {
+    let main_result = get_organization(&client, &orgnr, "enhet");
+    match main_result {
+        Ok(org) => {
+            let maybe_parent_org = get_parent_org(&client, &org)?;
+            let maybe_child_orgs = get_child_orgs(&client, &orgnr)?;
+            Ok(BrregOrgNrSearchResult::Found(OrganizationWithRelatedOrgs {
+                org_type: "Organisasjon",
+                org,
+                maybe_parent_org,
+                maybe_child_orgs,
+            }))
         }
+        Err(err) => {
+            match err.typ {
+                BrregErrorType::NotFound => {
+                    // Maybe an underenhet
+                    let child_result = get_organization(&client, &orgnr, "underenhet");
+                    match child_result {
+                        Ok(org) => {
+                            let maybe_parent_org = get_parent_org(&client, &org)?;
 
-        BrregErrorType::NotFound => {
-            eprintln!("Fant ikke denne enheten i brreg");
-        }
-
-        _ => handle_error(error),
-    }
-
-    std::process::exit(1);
-}
-
-fn handle_error(error: BrregError) {
-    // Handles error for extra queries (child/parent orgs)
-    // where it would be wrong to e.g. tell the user the
-    // org is missing on 404.
-    match error.typ {
-        BrregErrorType::NetworkError => {
-            eprintln!(
-                "Feil under kommunikasjon med brreg: {}",
-                error.error.unwrap()
-            );
-        }
-
-        BrregErrorType::UnexpectedResponse => {
-            eprintln!("Uventet svar fra brreg: {}", error.error.unwrap());
-        }
-
-        BrregErrorType::InternalServerError => {
-            eprintln!("Trøbbel i tårnet hos brreg: {}", error.error.unwrap());
-        }
-
-        BrregErrorType::JsonParseError => {
-            eprintln!(
-                "Klarte ikke lese svaret fra brreg: {}",
-                error.error.unwrap()
-            );
-        }
-
-        _ => {
-            panic!("Unexpected error type in handle_error: {:?}", error.typ)
+                            Ok(BrregOrgNrSearchResult::Found(OrganizationWithRelatedOrgs {
+                                org_type: "Underenhet",
+                                org,
+                                maybe_parent_org,
+                                maybe_child_orgs: None,
+                            }))
+                        }
+                        Err(child_err) => match child_err.typ {
+                            BrregErrorType::NotFound => {
+                                // Not found as parent nor as child
+                                Ok(BrregOrgNrSearchResult::NotFound())
+                            }
+                            BrregErrorType::Gone => {
+                                Ok(BrregOrgNrSearchResult::Removed("underenhet"))
+                            }
+                            _ => Err(child_err),
+                        },
+                    }
+                }
+                BrregErrorType::Gone => Ok(BrregOrgNrSearchResult::Removed("organisasjon")),
+                _ => Err(err),
+            }
         }
     }
-
-    std::process::exit(1);
-}
-
-fn handle_extra_call_to_brreg<T: std::fmt::Debug>(
-    result: Result<Option<T>, BrregError>,
-) -> Option<T> {
-    if result.is_ok() {
-        return result.unwrap();
-    }
-    handle_error(result.unwrap_err());
-    panic!("handle_error did not handle error")
 }
 
 fn main() {
@@ -393,7 +390,7 @@ fn main() {
     if combined_params.len() != 9 || combined_params.parse::<u32>().is_err() {
         eprintln!("Usage: {} *orgnr*", cmd_name);
         eprintln!("(orgnr must be nine numbers)");
-        std::process::exit(1);
+        std::process::exit(64);
     }
     let orgnr = combined_params;
 
@@ -405,29 +402,52 @@ fn main() {
         .build()
         .unwrap();
 
-    let main_result = get_organization(&client, &orgnr, "enhet");
-    match main_result {
-        Ok(org) => {
-            let parent_org = handle_extra_call_to_brreg(get_parent_org(&client, &org));
-            let child_orgs = handle_extra_call_to_brreg(get_child_orgs(&client, &orgnr));
-            print_org_info("Organisasjon", org, parent_org, child_orgs);
-        }
-        Err(err) => {
-            if err.typ == BrregErrorType::NotFound {
-                // Maybe an underenhet
-                let child_result = get_organization(&client, &orgnr, "underenhet");
-                match child_result {
-                    Ok(org) => {
-                        let parent_org = handle_extra_call_to_brreg(get_parent_org(&client, &org));
-                        print_org_info("Underenhet", org, parent_org, None);
-                    }
-                    Err(child_err) => {
-                        handle_main_error(child_err);
-                    }
-                }
-            } else {
-                handle_main_error(err);
+    let search_result = search_org_by_orgnr(&client, &orgnr);
+
+    match search_result {
+        Ok(result) => match result {
+            BrregOrgNrSearchResult::Found(org) => print_org_info(org),
+            BrregOrgNrSearchResult::NotFound() => {
+                eprintln!("Fant ikke denne enheten i brreg");
+                std::process::exit(90);
             }
+            BrregOrgNrSearchResult::Removed(typ) => {
+                eprintln!("Denne {}en er fjernet fra brreg", typ);
+                std::process::exit(91);
+            }
+        },
+        Err(error) => {
+            match error.typ {
+                BrregErrorType::NetworkError => {
+                    eprintln!(
+                        "Feil under kommunikasjon med brreg: {}",
+                        error.error.unwrap()
+                    );
+                }
+
+                BrregErrorType::UnexpectedResponse => {
+                    eprintln!("Uventet svar fra brreg: {}", error.error.unwrap());
+                }
+
+                BrregErrorType::InternalServerError => {
+                    eprintln!("Trøbbel i tårnet hos brreg: {}", error.error.unwrap());
+                }
+
+                BrregErrorType::JsonParseError => {
+                    eprintln!(
+                        "Klarte ikke lese svaret fra brreg: {}",
+                        error.error.unwrap()
+                    );
+                }
+
+                // This can only happen when we look up related orgs,
+                // and it's funky if referenced org is missing
+                BrregErrorType::Gone | BrregErrorType::NotFound => {
+                    eprintln!("En referert enhet manglet i brreg, dette var ikke forventet");
+                }
+            }
+
+            std::process::exit(1);
         }
     }
 }
