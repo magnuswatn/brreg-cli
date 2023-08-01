@@ -1,6 +1,6 @@
 [package]
 name = "brreg-cli"
-version = "2023.8.1-dev"
+version = "2023.8.1"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
