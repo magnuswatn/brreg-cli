@@ -259,47 +259,46 @@ fn print_org_info(
     println!("{}: {}", pad_title("Orgnummer"), org.organisasjonsnummer);
     println!("{}: {}", pad_title("Navn"), org.navn);
 
-    if org.slettedato.is_some() {
-        println!("{}: {}", pad_title("Slettedato"), org.slettedato.unwrap());
+    if let Some(slettedato) = org.slettedato {
+        println!("{}: {}", pad_title("Slettedato"), slettedato);
     }
 
-    if org.forretningsadresse.is_some() {
+    if let Some(forretningsadresse) = org.forretningsadresse {
         print!("{}: ", pad_title("Forretningsadresse"));
-        print_address(org.forretningsadresse.unwrap());
+        print_address(forretningsadresse);
     }
-    if org.postadresse.is_some() {
+    if let Some(postadresse) = org.postadresse {
         print!("{}: ", pad_title("Postadresse"));
-        print_address(org.postadresse.unwrap());
+        print_address(postadresse);
     }
 
-    if org.hjemmeside.is_some() {
-        println!("{}: {}", pad_title("Hjemmeside"), org.hjemmeside.unwrap());
+    if let Some(hjemmeside) = org.hjemmeside {
+        println!("{}: {}", pad_title("Hjemmeside"), hjemmeside);
     }
 
-    if org.registreringsdato_enhetsregisteret.is_some() {
+    if let Some(registreringsdato_enhetsregisteret) = org.registreringsdato_enhetsregisteret {
         println!(
             "{}: {}",
             pad_title("Registrert i Enhetsregisteret"),
-            org.registreringsdato_enhetsregisteret.unwrap()
+            registreringsdato_enhetsregisteret
         );
     }
-    if org.under_avvikling.is_some() {
+    if let Some(under_avvikling) = org.under_avvikling {
         println!(
             "{}: {}",
             pad_title("Under avvikling"),
-            get_norwegian_bool(org.under_avvikling.unwrap())
+            get_norwegian_bool(under_avvikling)
         );
     }
-    if org.under_tvangsavvikling_eller_tvangsopplosning.is_some() {
+    if let Some(under_ta_eller_to) = org.under_tvangsavvikling_eller_tvangsopplosning {
         println!(
             "{}: {}",
             pad_title("Under tvangsavvikling eller tvangsoppløsning"),
-            get_norwegian_bool(org.under_tvangsavvikling_eller_tvangsopplosning.unwrap())
+            get_norwegian_bool(under_ta_eller_to)
         );
     }
 
-    if maybe_parent_org.is_some() {
-        let parent_org = maybe_parent_org.unwrap();
+    if let Some(parent_org) = maybe_parent_org {
         println!(
             "{}: {} - {}",
             pad_title("Overordnet enhet"),
@@ -308,11 +307,11 @@ fn print_org_info(
         )
     }
 
-    if maybe_child_orgs.is_some() {
-        let child_orgs = maybe_child_orgs.unwrap().underenheter;
-        if child_orgs.len() > 0 {
+    if let Some(child_orgs) = maybe_child_orgs {
+        let underenheter = child_orgs.underenheter;
+        if underenheter.len() > 0 {
             print!("{}:", pad_title("Underenheter (20 første)"));
-            for (pos, child_org) in child_orgs.iter().enumerate() {
+            for (pos, child_org) in underenheter.iter().enumerate() {
                 if pos != 0 {
                     println!(
                         "{}  {} - {}",
