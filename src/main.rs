@@ -62,34 +62,23 @@ struct BrregInternalServerError {
 }
 
 #[derive(Debug, PartialEq)]
-enum BrregErrorType {
+enum BrregError {
     NotFound,
     Gone,
-    InternalServerError,
-    NetworkError,
-    UnexpectedResponse,
-    JsonParseError,
+    InternalServerError(String),
+    NetworkError(String),
+    UnexpectedResponse(String),
+    JsonParseError(String),
 }
 
-#[derive(Debug)]
-struct BrregError {
-    typ: BrregErrorType,
-    error: Option<String>,
-}
 impl From<reqwest::Error> for BrregError {
     fn from(error: reqwest::Error) -> Self {
-        BrregError {
-            typ: BrregErrorType::NetworkError,
-            error: Some(error.to_string()),
-        }
+        BrregError::NetworkError(error.to_string())
     }
 }
 impl From<std::io::Error> for BrregError {
     fn from(error: std::io::Error) -> Self {
-        BrregError {
-            typ: BrregErrorType::JsonParseError,
-            error: Some(error.to_string()),
-        }
+        BrregError::JsonParseError(error.to_string())
     }
 }
 
@@ -110,45 +99,33 @@ fn get_organization(client: &Client, orgnr: &str, typ: &str) -> Result<Organizat
             if json_parse_res.is_ok() {
                 return Ok(json_parse_res.unwrap());
             }
-            return Err(BrregError {
-                typ: BrregErrorType::JsonParseError,
-                error: Some(json_parse_res.unwrap_err().to_string()),
-            });
+            return Err(BrregError::JsonParseError(
+                json_parse_res.unwrap_err().to_string(),
+            ));
         }
 
-        StatusCode::NOT_FOUND => Err(BrregError {
-            typ: BrregErrorType::NotFound,
-            error: None,
-        }),
+        StatusCode::NOT_FOUND => Err(BrregError::NotFound),
 
-        StatusCode::GONE => Err(BrregError {
-            typ: BrregErrorType::Gone,
-            error: None,
-        }),
+        StatusCode::GONE => Err(BrregError::Gone),
 
         StatusCode::INTERNAL_SERVER_ERROR => {
             let json_parse_res = serde_json::from_str::<BrregInternalServerError>(&body);
             if json_parse_res.is_ok() {
                 let brreg_error = json_parse_res.unwrap();
 
-                return Err(BrregError {
-                    typ: BrregErrorType::InternalServerError,
-                    error: Some(format!(
-                        "{}: {} {}",
-                        brreg_error.trace, brreg_error.error, brreg_error.message
-                    )),
-                });
+                return Err(BrregError::InternalServerError(format!(
+                    "{}: {} {}",
+                    brreg_error.trace, brreg_error.error, brreg_error.message
+                )));
             }
-            return Err(BrregError {
-                typ: BrregErrorType::InternalServerError,
-                error: Some("Got unparsable 500 internal server error".to_string()),
-            });
+            return Err(BrregError::InternalServerError(
+                "Got unparsable 500 internal server error".to_string(),
+            ));
         }
 
-        _ => Err(BrregError {
-            typ: BrregErrorType::UnexpectedResponse,
-            error: Some(format!("Got status code {}", response.status().as_str()).to_string()),
-        }),
+        _ => Err(BrregError::UnexpectedResponse(
+            format!("Got status code {}", response.status().as_str()).to_string(),
+        )),
     }
 }
 
@@ -177,10 +154,9 @@ fn get_child_orgs(client: &Client, parent_orgnr: &str) -> Result<Option<Underenh
             if json_parse_res.is_ok() {
                 return Ok(json_parse_res.unwrap()._embedded);
             }
-            return Err(BrregError {
-                typ: BrregErrorType::JsonParseError,
-                error: Some(json_parse_res.unwrap_err().to_string()),
-            });
+            return Err(BrregError::JsonParseError(
+                json_parse_res.unwrap_err().to_string(),
+            ));
         }
 
         StatusCode::INTERNAL_SERVER_ERROR => {
@@ -188,24 +164,19 @@ fn get_child_orgs(client: &Client, parent_orgnr: &str) -> Result<Option<Underenh
             if json_parse_res.is_ok() {
                 let brreg_error = json_parse_res.unwrap();
 
-                return Err(BrregError {
-                    typ: BrregErrorType::InternalServerError,
-                    error: Some(format!(
-                        "{}: {} {}",
-                        brreg_error.trace, brreg_error.error, brreg_error.message
-                    )),
-                });
+                return Err(BrregError::InternalServerError(format!(
+                    "{}: {} {}",
+                    brreg_error.trace, brreg_error.error, brreg_error.message
+                )));
             }
-            return Err(BrregError {
-                typ: BrregErrorType::JsonParseError,
-                error: Some(json_parse_res.unwrap_err().to_string()),
-            });
+            return Err(BrregError::JsonParseError(
+                json_parse_res.unwrap_err().to_string(),
+            ));
         }
 
-        _ => Err(BrregError {
-            typ: BrregErrorType::UnexpectedResponse,
-            error: Some(format!("Got status code {}", response.status().as_str()).to_string()),
-        }),
+        _ => Err(BrregError::UnexpectedResponse(
+            format!("Got status code {}", response.status().as_str()).to_string(),
+        )),
     }
 }
 
@@ -336,8 +307,8 @@ fn search_org_by_orgnr(client: &Client, orgnr: &str) -> Result<BrregOrgNrSearchR
             }))
         }
         Err(err) => {
-            match err.typ {
-                BrregErrorType::NotFound => {
+            match err {
+                BrregError::NotFound => {
                     // Maybe an underenhet
                     let child_result = get_organization(&client, &orgnr, "underenhet");
                     match child_result {
@@ -351,19 +322,17 @@ fn search_org_by_orgnr(client: &Client, orgnr: &str) -> Result<BrregOrgNrSearchR
                                 maybe_child_orgs: None,
                             }))
                         }
-                        Err(child_err) => match child_err.typ {
-                            BrregErrorType::NotFound => {
+                        Err(child_err) => match child_err {
+                            BrregError::NotFound => {
                                 // Not found as parent nor as child
                                 Ok(BrregOrgNrSearchResult::NotFound())
                             }
-                            BrregErrorType::Gone => {
-                                Ok(BrregOrgNrSearchResult::Removed("underenhet"))
-                            }
+                            BrregError::Gone => Ok(BrregOrgNrSearchResult::Removed("underenhet")),
                             _ => Err(child_err),
                         },
                     }
                 }
-                BrregErrorType::Gone => Ok(BrregOrgNrSearchResult::Removed("organisasjon")),
+                BrregError::Gone => Ok(BrregOrgNrSearchResult::Removed("organisasjon")),
                 _ => Err(err),
             }
         }
@@ -417,32 +386,26 @@ fn main() {
             }
         },
         Err(error) => {
-            match error.typ {
-                BrregErrorType::NetworkError => {
-                    eprintln!(
-                        "Feil under kommunikasjon med brreg: {}",
-                        error.error.unwrap()
-                    );
+            match error {
+                BrregError::NetworkError(err) => {
+                    eprintln!("Feil under kommunikasjon med brreg: {}", err);
                 }
 
-                BrregErrorType::UnexpectedResponse => {
-                    eprintln!("Uventet svar fra brreg: {}", error.error.unwrap());
+                BrregError::UnexpectedResponse(err) => {
+                    eprintln!("Uventet svar fra brreg: {}", err);
                 }
 
-                BrregErrorType::InternalServerError => {
-                    eprintln!("Trøbbel i tårnet hos brreg: {}", error.error.unwrap());
+                BrregError::InternalServerError(err) => {
+                    eprintln!("Trøbbel i tårnet hos brreg: {}", err);
                 }
 
-                BrregErrorType::JsonParseError => {
-                    eprintln!(
-                        "Klarte ikke lese svaret fra brreg: {}",
-                        error.error.unwrap()
-                    );
+                BrregError::JsonParseError(err) => {
+                    eprintln!("Klarte ikke lese svaret fra brreg: {}", err);
                 }
 
                 // This can only happen when we look up related orgs,
                 // and it's funky if referenced org is missing
-                BrregErrorType::Gone | BrregErrorType::NotFound => {
+                BrregError::Gone | BrregError::NotFound => {
                     eprintln!("En referert enhet manglet i brreg, dette var ikke forventet");
                 }
             }
