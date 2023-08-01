@@ -62,32 +62,33 @@ struct BrregError {
     typ: BrregErrorType,
     error: Option<String>,
 }
+impl From<reqwest::Error> for BrregError {
+    fn from(error: reqwest::Error) -> Self {
+        BrregError {
+            typ: BrregErrorType::NetworkError,
+            error: Some(error.to_string()),
+        }
+    }
+}
+impl From<std::io::Error> for BrregError {
+    fn from(error: std::io::Error) -> Self {
+        BrregError {
+            typ: BrregErrorType::JsonParseError,
+            error: Some(error.to_string()),
+        }
+    }
+}
 
 fn get_organization(client: &Client, orgnr: &str, typ: &str) -> Result<Organization, BrregError> {
-    let http_result = client
+    let mut response = client
         .get(format!(
             "https://data.brreg.no/enhetsregisteret/api/{}er/{}",
             typ, orgnr
         ))
-        .send();
-
-    if http_result.is_err() {
-        return Err(BrregError {
-            typ: BrregErrorType::NetworkError,
-            error: Some(http_result.unwrap_err().to_string()),
-        });
-    }
-
-    let mut response = http_result.unwrap();
+        .send()?;
 
     let mut body = String::new();
-    let read_result = response.read_to_string(&mut body);
-    if read_result.is_err() {
-        return Err(BrregError {
-            typ: BrregErrorType::NetworkError,
-            error: Some(read_result.unwrap_err().to_string()),
-        });
-    }
+    response.read_to_string(&mut body)?;
 
     match response.status() {
         StatusCode::OK => {
@@ -147,27 +148,13 @@ fn get_parent_org(client: &Client, org: &Organization) -> Result<Option<Organiza
 }
 
 fn get_child_orgs(client: &Client, parent_orgnr: &str) -> Result<Option<Underenheter>, BrregError> {
-    let http_result = client
+    let mut response = client
         .get("https://data.brreg.no/enhetsregisteret/api/underenheter")
         .query(&[("overordnetEnhet", parent_orgnr)])
-        .send();
-
-    if http_result.is_err() {
-        return Err(BrregError {
-            typ: BrregErrorType::NetworkError,
-            error: Some(http_result.unwrap_err().to_string()),
-        });
-    }
-    let mut response = http_result.unwrap();
+        .send()?;
 
     let mut body = String::new();
-    let read_result = response.read_to_string(&mut body);
-    if read_result.is_err() {
-        return Err(BrregError {
-            typ: BrregErrorType::NetworkError,
-            error: Some(read_result.unwrap_err().to_string()),
-        });
-    }
+    response.read_to_string(&mut body)?;
 
     match response.status() {
         StatusCode::OK => {
