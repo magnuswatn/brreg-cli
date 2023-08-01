@@ -138,17 +138,12 @@ fn get_organization(client: &Client, orgnr: &str, typ: &str) -> Result<Organizat
 }
 
 fn get_parent_org(client: &Client, org: &Organization) -> Result<Option<Organization>, BrregError> {
-    if org.overordnet_enhet.is_none() {
-        return Ok(None);
+    match org.overordnet_enhet.as_ref() {
+        None => Ok(None),
+        Some(parent_orgnr) => {
+            return Ok(Some(get_organization(client, &parent_orgnr, "enhet")?));
+        }
     }
-
-    let parent_orgnr = org.overordnet_enhet.as_ref().unwrap();
-
-    let result = get_organization(client, &parent_orgnr, "enhet");
-    if result.is_ok() {
-        return Ok(Some(result.unwrap()));
-    }
-    return Err(result.unwrap_err());
 }
 
 fn get_child_orgs(client: &Client, parent_orgnr: &str) -> Result<Option<Underenheter>, BrregError> {
@@ -424,26 +419,28 @@ fn main() {
         .unwrap();
 
     let main_result = get_organization(&client, &orgnr, "enhet");
-    if main_result.is_ok() {
-        let org = main_result.unwrap();
-        let parent_org = handle_extra_call_to_brreg(get_parent_org(&client, &org));
-        let child_orgs = handle_extra_call_to_brreg(get_child_orgs(&client, &orgnr));
-        print_org_info("Organisasjon", org, parent_org, child_orgs);
-    } else {
-        let err = main_result.unwrap_err();
-
-        if err.typ == BrregErrorType::NotFound {
-            // Maybe an underenhet
-            let child_result = get_organization(&client, &orgnr, "underenhet");
-            if child_result.is_ok() {
-                let org = child_result.unwrap();
-                let parent_org = handle_extra_call_to_brreg(get_parent_org(&client, &org));
-                print_org_info("Underenhet", org, parent_org, None);
+    match main_result {
+        Ok(org) => {
+            let parent_org = handle_extra_call_to_brreg(get_parent_org(&client, &org));
+            let child_orgs = handle_extra_call_to_brreg(get_child_orgs(&client, &orgnr));
+            print_org_info("Organisasjon", org, parent_org, child_orgs);
+        }
+        Err(err) => {
+            if err.typ == BrregErrorType::NotFound {
+                // Maybe an underenhet
+                let child_result = get_organization(&client, &orgnr, "underenhet");
+                match child_result {
+                    Ok(org) => {
+                        let parent_org = handle_extra_call_to_brreg(get_parent_org(&client, &org));
+                        print_org_info("Underenhet", org, parent_org, None);
+                    }
+                    Err(child_err) => {
+                        handle_main_error(child_err);
+                    }
+                }
             } else {
-                handle_main_error(child_result.unwrap_err());
+                handle_main_error(err);
             }
-        } else {
-            handle_main_error(err);
         }
     }
 }
