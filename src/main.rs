@@ -1,8 +1,8 @@
 use reqwest::{blocking::Client, StatusCode};
 use serde_derive::Deserialize;
-use std::env;
 use std::io::Read;
 use std::time::Duration;
+use std::{env, fmt};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_TITLE_LENGTH: usize = 44;
@@ -60,6 +60,11 @@ struct BrregInternalServerError {
     error: String,
     message: String,
 }
+impl fmt::Display for BrregInternalServerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}: {} {}", self.trace, self.error, self.message)
+    }
+}
 
 #[derive(Debug, PartialEq)]
 enum BrregError {
@@ -81,6 +86,11 @@ impl From<std::io::Error> for BrregError {
         BrregError::JsonParseError(error.to_string())
     }
 }
+impl From<serde_json::Error> for BrregError {
+    fn from(error: serde_json::Error) -> Self {
+        BrregError::JsonParseError(error.to_string())
+    }
+}
 
 fn get_organization(client: &Client, orgnr: &str, typ: &str) -> Result<Organization, BrregError> {
     let mut response = client
@@ -94,15 +104,7 @@ fn get_organization(client: &Client, orgnr: &str, typ: &str) -> Result<Organizat
     response.read_to_string(&mut body)?;
 
     match response.status() {
-        StatusCode::OK => {
-            let json_parse_res = serde_json::from_str::<Organization>(&body);
-            if json_parse_res.is_ok() {
-                return Ok(json_parse_res.unwrap());
-            }
-            return Err(BrregError::JsonParseError(
-                json_parse_res.unwrap_err().to_string(),
-            ));
-        }
+        StatusCode::OK => Ok(serde_json::from_str::<Organization>(&body)?),
 
         StatusCode::NOT_FOUND => Err(BrregError::NotFound),
 
@@ -112,10 +114,7 @@ fn get_organization(client: &Client, orgnr: &str, typ: &str) -> Result<Organizat
             let json_parse_res = serde_json::from_str::<BrregInternalServerError>(&body);
 
             match json_parse_res {
-                Ok(brreg_error) => Err(BrregError::InternalServerError(format!(
-                    "{}: {} {}",
-                    brreg_error.trace, brreg_error.error, brreg_error.message
-                ))),
+                Ok(brreg_error) => Err(BrregError::InternalServerError(brreg_error.to_string())),
                 Err(_) => Err(BrregError::InternalServerError(
                     "Got unparsable 500 internal server error".to_string(),
                 )),
@@ -147,24 +146,14 @@ fn get_child_orgs(client: &Client, parent_orgnr: &str) -> Result<Option<Underenh
     response.read_to_string(&mut body)?;
 
     match response.status() {
-        StatusCode::OK => {
-            let json_parse_res = serde_json::from_str::<SearchResponse>(&body);
-
-            match json_parse_res {
-                Ok(search_response) => Ok(search_response._embedded),
-                Err(parse_error) => Err(BrregError::JsonParseError(parse_error.to_string())),
-            }
-        }
+        StatusCode::OK => Ok(serde_json::from_str::<SearchResponse>(&body)?._embedded),
 
         StatusCode::INTERNAL_SERVER_ERROR => {
             let json_parse_res = serde_json::from_str::<BrregInternalServerError>(&body);
 
             match json_parse_res {
-                Ok(brreg_error) => Err(BrregError::InternalServerError(format!(
-                    "{}: {} {}",
-                    brreg_error.trace, brreg_error.error, brreg_error.message
-                ))),
-                Err(parse_error) => Err(BrregError::JsonParseError(parse_error.to_string())),
+                Ok(brreg_error) => Err(BrregError::InternalServerError(brreg_error.to_string())),
+                Err(parse_error) => Err(BrregError::InternalServerError(parse_error.to_string())),
             }
         }
 
