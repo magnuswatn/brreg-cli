@@ -22,6 +22,11 @@ struct Organization {
     hjemmeside: Option<String>,
     overordnet_enhet: Option<String>,
 }
+#[derive(Deserialize, Debug, PartialEq)]
+struct RemovedOrganization {
+    organisasjonsnummer: String,
+    slettedato: String,
+}
 #[derive(Deserialize, Debug)]
 struct Adresse {
     adresse: Vec<String>,
@@ -46,11 +51,15 @@ struct OrganizationWithRelatedOrgs {
     maybe_child_orgs: Option<Underenheter>,
 }
 
+struct RemovedOrganizationWithRelatedOrgs {
+    org_type: &'static str,
+    org: RemovedOrganization,
+}
+
 enum BrregOrgNrSearchResult {
     Found(OrganizationWithRelatedOrgs),
     NotFound(),
-    // TODO: get deleted date from response
-    Removed(&'static str), // hovedenhet/underenhet
+    Removed(RemovedOrganizationWithRelatedOrgs),
 }
 
 // https://data.brreg.no/enhetsregisteret/api/docs/index.html#_500_feil_p%C3%A5_server
@@ -69,7 +78,7 @@ impl fmt::Display for BrregInternalServerError {
 #[derive(Debug, PartialEq)]
 enum BrregError {
     NotFound,
-    Gone,
+    Gone(RemovedOrganization),
     InternalServerError(String),
     NetworkError(String),
     UnexpectedResponse(String),
@@ -108,7 +117,9 @@ fn get_organization(client: &Client, orgnr: &str, typ: &str) -> Result<Organizat
 
         StatusCode::NOT_FOUND => Err(BrregError::NotFound),
 
-        StatusCode::GONE => Err(BrregError::Gone),
+        StatusCode::GONE => Err(BrregError::Gone(
+            serde_json::from_str::<RemovedOrganization>(&body)?,
+        )),
 
         StatusCode::INTERNAL_SERVER_ERROR => {
             let json_parse_res = serde_json::from_str::<BrregInternalServerError>(&body);
@@ -310,12 +321,22 @@ fn search_org_by_orgnr(client: &Client, orgnr: &str) -> Result<BrregOrgNrSearchR
                                 // Not found as parent nor as child
                                 Ok(BrregOrgNrSearchResult::NotFound())
                             }
-                            BrregError::Gone => Ok(BrregOrgNrSearchResult::Removed("underenhet")),
+                            BrregError::Gone(removed_org) => Ok(BrregOrgNrSearchResult::Removed(
+                                RemovedOrganizationWithRelatedOrgs {
+                                    org_type: "underenhet",
+                                    org: removed_org,
+                                },
+                            )),
                             _ => Err(child_err),
                         },
                     }
                 }
-                BrregError::Gone => Ok(BrregOrgNrSearchResult::Removed("organisasjon")),
+                BrregError::Gone(removed_org) => Ok(BrregOrgNrSearchResult::Removed(
+                    RemovedOrganizationWithRelatedOrgs {
+                        org_type: "organisasjon",
+                        org: removed_org,
+                    },
+                )),
                 _ => Err(err),
             }
         }
@@ -363,8 +384,11 @@ fn main() {
                 eprintln!("Fant ikke denne enheten i brreg");
                 std::process::exit(90);
             }
-            BrregOrgNrSearchResult::Removed(typ) => {
-                eprintln!("Denne {}en er fjernet fra brreg", typ);
+            BrregOrgNrSearchResult::Removed(removed_org) => {
+                eprintln!(
+                    "Denne {}en ble fjernet fra brreg {}",
+                    removed_org.org_type, removed_org.org.slettedato
+                );
                 std::process::exit(91);
             }
         },
@@ -388,7 +412,7 @@ fn main() {
 
                 // This can only happen when we look up related orgs,
                 // and it's funky if referenced org is missing
-                BrregError::Gone | BrregError::NotFound => {
+                BrregError::Gone(_) | BrregError::NotFound => {
                     eprintln!("En referert enhet manglet i brreg, dette var ikke forventet");
                 }
             }
